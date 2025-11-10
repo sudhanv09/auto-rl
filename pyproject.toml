@@ -1,7 +1,7 @@
 [project]
-name = "zuber-beats"
+name = "auto-rl"
 version = "0.1.0"
-description = "Add your description here"
+description = "A naive playground to test RL for delivery optimization."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = []
