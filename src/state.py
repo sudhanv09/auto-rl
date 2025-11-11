@@ -18,7 +18,7 @@ class Company:
         self.consecutive_loss_epochs: int = 0
 
         # Internal
-        self.epoch_expense: float = 0.0
+        self.epoch_expenses: float = 0.0
         self.epoch_revenue: float = 0.0
 
         # Driver metrics
@@ -89,7 +89,7 @@ class Company:
             
         # Calculate order completion rate
         if state.total_orders_available > 0:
-            self.order_completion_rate = state.total_orders_completed / state.total_orders_available
+            self.order_completion_rate = state.total_orders_complete / state.total_orders_available
         else:
             self.order_completion_rate = 1.0
 
@@ -106,7 +106,7 @@ class Driver:
         # Attributes
         self.cost_per_km: float = 30
         self.profit_threshold = 35_000
-        self.minimum_profit_per_km: float = np.random.uniform(25, 40)
+        self.minimum_profit_per_km: float = np.random.uniform(5, 20)
 
         # sentiment
         self.satisfaction_score = 0.8
@@ -143,7 +143,7 @@ class Driver:
             (1 - alpha) * self.satisfaction_score
         )
 
-        churn_probability = (1 - self.satisfaction_score) ** 2
+        churn_probability = (1 - self.satisfaction_score) ** 3
 
         if np.random.rand() < churn_probability:
             self.is_active = False
