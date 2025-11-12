@@ -70,8 +70,8 @@ class Env:
 
                 driver = np.random.choice(self.drivers)
                 if driver.is_active and driver.accept_order(order, policy):
-                    payout = order["distance"] * policy["rate_per_km"]
                     order_fee = order["distance"] * self.config["avg_order_fee_per_km"]
+                    payout = policy["order_payout"]
 
                     self.company.process_payment_to_driver(payout)
                     self.company.record_revenue_from_order(order_fee)
@@ -97,27 +97,30 @@ class Env:
     
     def calculate_reward(self):
         company = self.company
-        reward = 0
 
-        # Profitability
+        profit_norm = np.tanh(company.last_epoch_profit / 1e5)
+        driver_profit_norm = np.tanh(company.avg_driver_profit / 1e4)
+        churn_penalty = -5.0 * company.driver_churn_rate
+        completion_penalty = -10.0 * max(0.0, 0.9 - company.order_completion_rate)
+
+        signup_reward = np.tanh(company.new_signups / 50.0)
+
+        # Weight signup reward by profitability (only helps if profit positive)
         if company.last_epoch_profit > 0:
-            reward += 10
+            signup_term = 5.0 * signup_reward
         else:
-            reward -= 10
+            signup_term = 2.0 * signup_reward  # dampened if unprofitable
 
-        if company.consecutive_loss_epochs >= 3:
-            reward -= 20
+        reward = (
+            6.0 * profit_norm +
+            8.0 * driver_profit_norm +
+            churn_penalty +
+            completion_penalty +
+            signup_term
+        )
 
-        # Driver sentiment
-        expectation_threshold = self.config.get("profit_expectation_threshold", 35_000)
-        if company.avg_driver_profit > expectation_threshold:
-            reward += 15
+        if company.current_balance <= 0:
+            reward -= 50.0
 
-        # Churn and reliability
-        reward += 10 * (1 - company.driver_churn_rate)
-        if company.driver_churn_rate > 0.25:
-            reward -= 50
-        if company.order_completion_rate < 0.9:
-            reward -= 30
+        return float(reward)
 
-        return reward

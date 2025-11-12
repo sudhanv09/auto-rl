@@ -15,6 +15,24 @@ BATCH_SIZE = 32
 TARGET_UPDATE = 10
 REPLAY_MEMORY = 2000
 
+
+def normalize(s: np.ndarray) -> np.ndarray:
+    return np.array(
+        [
+            s[0] / 1e6,  # balance scaled by 1M
+            s[1] / 1e5,  # last_epoch_profit
+            s[2] / 10,  # consecutive_loss_epochs
+            s[3] / 500,  # active drivers
+            s[4],  # churn rate already in [0,1]
+            s[5] / 100,  # new_signups
+            s[6] / 1e5,  # avg_driver_earnings
+            s[7] / 1e5,  # avg_driver_profit
+            s[8],  # completion rate in [0,1]
+        ],
+        dtype=np.float32,
+    )
+
+
 env = Env(
     {
         "driver_count": 50,
@@ -29,8 +47,8 @@ env = Env(
 state = env.reset()
 state_dim = len(state)
 
-rate_options = np.arange(25, 61, 5)
-action_dim = len(rate_options)
+payout_options = np.arange(15, 81, 5)
+action_dim = len(payout_options)
 
 policy_net = DQN(state_dim, action_dim)
 target_net = DQN(state_dim, action_dim)
@@ -50,16 +68,16 @@ for episode in range(EPISODES):
     while not done:
         # ε-greedy policy
         if np.random.random() < EPSILON:
-            action = np.random.randint(0, action_dim - 1)
+            action = np.random.choice(action_dim)
         else:
             Tensor.training = False
-            q_values = policy_net(state)
-            Tensor.training = True 
+            q_values = policy_net(normalize(state))
+            Tensor.training = True
             action = int(q_values.argmax().item())
 
         # choose how much to pay
-        rate = float(rate_options[action])
-        policy = {"rate_per_km": rate}
+        payout = float(payout_options[action])
+        policy = {"order_payout": payout}
 
         next_state, reward, done, _ = env.step(policy)
         memory.append((state, action, reward, next_state, done))
@@ -73,7 +91,10 @@ for episode in range(EPISODES):
             losses = []
             for i in range(BATCH_SIZE):
                 Tensor.training = False
-                target_q = rewards[i] + (1 - dones[i]) * GAMMA * target_net(next_states[i]).max().item()
+                target_q = (
+                    rewards[i]
+                    + (1 - dones[i]) * GAMMA * target_net(next_states[i]).max().item()
+                )
                 Tensor.training = True
 
                 q_pred = policy_net(states[i])[0, actions[i]]
@@ -92,7 +113,9 @@ for episode in range(EPISODES):
             t.assign(p)
 
     num_drivers_quit = int(env.company.driver_churn_rate * len(env.drivers))
-    incomplete_orders = env.state.total_orders_available - env.state.total_orders_complete
+    incomplete_orders = (
+        env.state.total_orders_available - env.state.total_orders_complete
+    )
 
     print(f"Episode {episode}:")
     print(f"  Total Reward        = {total_reward:.2f}")
@@ -101,4 +124,3 @@ for episode in range(EPISODES):
     print(f"  Drivers Quit        = {num_drivers_quit}")
     print(f"  Orders Incomplete   = {incomplete_orders}")
     print("-" * 50)
-

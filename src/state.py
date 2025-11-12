@@ -118,7 +118,7 @@ class Driver:
         self.total_kms_driven = 0.0
 
     def accept_order(self, order: dict, policy: dict) -> bool:
-        earnings = order["distance"] * policy["rate_per_km"]
+        earnings = policy["order_payout"]
         cost = order["distance"] * self.cost_per_km
 
         profit = earnings - cost
