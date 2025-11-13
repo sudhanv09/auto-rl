@@ -1,149 +1,97 @@
 import numpy as np
 
 class GlobalState:
-    def __init__(self):
+    def __init__(self, base_demand=50):
         self.current_epoch: int = 0
-        self.total_orders_available: int = 0
-        self.total_orders_complete: int = 0
+        self.base_demand = base_demand
+        self.market_demand_multiplier = 1.0 
+        self.orders_queue = []
+
+
+class Order:
+    def __init__(self, order_id, distance_km, base_price=40, base_expected_wage=15):
+        self.id = order_id
+        self.distance = distance_km
+        self.time_waiting = 0
+        self.max_wait_time = 5
+        
+        self.customer_price = base_price + (base_expected_wage * distance_km)
 
 
 class Company:
-    def __init__(self, drivers: int, seed_money: int):
-        self.total_drivers = drivers
-        self.seed_money = seed_money
-
-        # Balance sheet
-        self.current_balance: float = seed_money
-        self.last_epoch_profit: float = 0.0
-        self.consecutive_loss_epochs: int = 0
-
-        # Internal
-        self.epoch_expenses: float = 0.0
-        self.epoch_revenue: float = 0.0
-
-        # Driver metrics
-        self.active_drivers = drivers
-        self.driver_churn_rate: float = 0.0
-        self.new_signups: int = 0
-
-        # Operation Metrics
-        self.avg_driver_earnings: float = 0.0
-        self.avg_driver_profit: float = 0.0
-        self.avg_order_price: float = 0.0
-        self.avg_completion_rate: float = 1.0
-
-    def reset(self):
-        self.epoch_revenue = 0.0
-        self.epoch_expenses = 0.0
-
-    def process_payment_to_driver(self, payment_amount: float):
-        self.epoch_expenses += payment_amount
-
-    def record_revenue_from_order(self, order_fee: float):
-        self.epoch_revenue += order_fee
-
-    def finalize_epoch_accounting(self):
-        self.last_epoch_profit = self.epoch_revenue - self.epoch_expenses
-        self.current_balance += self.last_epoch_profit
-
-        if self.last_epoch_profit < 0:
-            self.consecutive_loss_epochs += 1
-        else:
-            self.consecutive_loss_epochs = 0
-            
-    def update_driver_fleet(self, all_drivers: list, base_signup_rate: int = 10):
-        quit_count = sum(1 for driver in all_drivers if not driver.is_active)
+    def __init__(self, seed_money_twd=1_000_000):
+        self.balance = seed_money_twd
         
-        active_driver_fleet = [driver for driver in all_drivers if driver.is_active]
-
-        # Simulate new driver signups based on last month's average earnings
-        if self.avg_driver_earnings > 0:
-            attraction_factor = self.avg_driver_earnings / 1000.0 
-            num_new_signups = int(base_signup_rate * attraction_factor)
-        else:
-            num_new_signups = 0
-        
-        self.new_driver_signups = num_new_signups
-        
-        # Add the new drivers to the fleet
-        last_driver_id = all_drivers[-1].id if all_drivers else 0
-        for i in range(num_new_signups):
-            new_driver_id = last_driver_id + i + 1
-            active_driver_fleet.append(Driver(new_driver_id))
-            
-        self.driver_churn_rate = quit_count / len(all_drivers) if all_drivers else 0.0
-        
-        return active_driver_fleet
+        # Metrics for the Agent
+        self.daily_profit = 0
+        self.daily_revenue = 0
+        self.daily_cost = 0
+        self.daily_delivered = 0
+        self.daily_expired = 0
     
-    def epoch_report(self, all_drivers: list, state):
-        self.active_drivers = len(all_drivers)
+    def reset_daily_stats(self):
+        self.daily_profit = 0
+        self.daily_revenue = 0
+        self.daily_cost = 0
+        self.daily_delivered = 0
+        self.daily_expired = 0
 
-        if self.active_drivers > 0:
-            all_earnings = [d.monthly_profit + (d.total_kms_driven * d.cost_per_km) for d in all_drivers]
-            all_profits = [d.monthly_profit for d in all_drivers]
-            self.avg_driver_earnings = np.mean(all_earnings)
-            self.avg_driver_profit = np.mean(all_profits)
-        else:
-            self.avg_driver_earnings = 0.0
-            self.avg_driver_profit = 0.0
-            
-        # Calculate order completion rate
-        if state.total_orders_available > 0:
-            self.order_completion_rate = state.total_orders_complete / state.total_orders_available
-        else:
-            self.order_completion_rate = 1.0
+    def process_transaction(self, revenue, driver_payout):
+        self.balance += (revenue - driver_payout)
+        self.daily_revenue += revenue
+        self.daily_cost += driver_payout
+        self.daily_profit += (revenue - driver_payout)
+        self.daily_delivered += 1
 
 
 class Driver:
-    def __init__(self, driver_id: int):
+    def __init__(self, driver_id):
         self.id = driver_id
+        self.is_active = True
 
-        # Performance
-        self.monthly_profit: float = 0
-        self.num_orders_completed: int = 0
-        self.total_kms_driven: float = 0.0
+        self.cost_per_km = 2.0
+        self.avg_speed_kmh = 20.0
+        self.target_hourly_wage = np.random.uniform(160, 250)
 
-        # Attributes
-        self.cost_per_km: float = 30
-        self.profit_threshold = 35_000
-        self.minimum_profit_per_km: float = np.random.uniform(5, 20)
+        self.monthly_profit_threshold = 35_000
+        self.current_month_profit = 0.0
+        self.satisfaction = 100.0
+        
 
-        # sentiment
-        self.satisfaction_score = 0.8
-        self.is_active: bool = True
-
-    def reset(self):
-        self.monthly_profit = 0
-        self.num_orders_completed = 0
-        self.total_kms_driven = 0.0
-
-    def accept_order(self, order: dict, policy: dict) -> bool:
-        earnings = policy["order_payout"]
-        cost = order["distance"] * self.cost_per_km
-
-        profit = earnings - cost
-        profit_per_km = profit / order["distance"] if order["distance"] > 0 else 0
-
-        if profit_per_km >= self.minimum_profit_per_km:
-            self.complete_order(order, earnings, cost)
+    def evaluate_offer(self, order: Order, offered_payout: float) -> bool:
+        """
+        Returns True if the driver accepts the offer.
+        """
+        trip_time_hours = order.distance / self.avg_speed_kmh
+        
+        wage_cost = trip_time_hours * self.target_hourly_wage
+        material_cost = order.distance * self.cost_per_km
+        
+        min_required_payout = wage_cost + material_cost
+        
+        if offered_payout >= min_required_payout:
+            net_profit = offered_payout - material_cost
+            self.current_month_profit += net_profit
             return True
-        else:
+        
+        return False
+    
+    def end_of_month_review(self) -> bool:
+        if not self.is_active: 
             return False
 
-    def complete_order(self, order, earnings, cost):
-        self.num_orders_completed += 1
-        self.total_kms_driven += order["distance"]
-        self.monthly_profit += earnings - cost
+        performance_ratio = self.current_month_profit / self.monthly_profit_threshold
+        
+        if performance_ratio >= 1.0:
+            self.satisfaction = min(100.0, self.satisfaction + 10.0)
+        else:
+            penalty = 30.0 * (1.0 - performance_ratio)
+            self.satisfaction -= penalty
 
-    def update_sentiment(self, alpha=0.25):
-        profit_ratio = self.monthly_profit / self.profit_threshold
-        current_feeling = 1 / (1 + np.exp(-10 * (profit_ratio - 1)))
+        self.current_month_profit = 0.0
 
-        self.satisfaction_score = (alpha * current_feeling) + (
-            (1 - alpha) * self.satisfaction_score
-        )
-
-        churn_probability = (1 - self.satisfaction_score) ** 3
-
-        if np.random.rand() < churn_probability:
+        if self.satisfaction <= 0:
             self.is_active = False
+            return True # Driver Quit
+        
+        return False # Driver Stayed
