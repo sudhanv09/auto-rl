@@ -1,8 +1,9 @@
 import numpy as np
 from collections import deque
-import tinygrad.nn as nn
-from tinygrad.tensor import Tensor
-from tinygrad import Device
+
+import torch
+import torch.nn as nn
+import torch.optim as optim
 
 from model import DQN
 from env import Env
@@ -14,23 +15,27 @@ LR = 0.001
 BATCH_SIZE = 32
 TARGET_UPDATE = 10
 REPLAY_MEMORY = 2000
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def normalize(s: np.ndarray) -> np.ndarray:
+    if s.ndim == 1:
+        s = np.expand_dims(s, axis=0)
+
     return np.array(
         [
-            s[0] / 1e6,  # balance scaled by 1M
-            s[1] / 1e5,  # last_epoch_profit
-            s[2] / 10,  # consecutive_loss_epochs
-            s[3] / 500,  # active drivers
-            s[4],  # churn rate already in [0,1]
-            s[5] / 100,  # new_signups
-            s[6] / 1e5,  # avg_driver_earnings
-            s[7] / 1e5,  # avg_driver_profit
-            s[8],  # completion rate in [0,1]
+            s[:, 0] / 1e6,  # balance scaled by 1M
+            s[:, 1] / 1e5,  # last_epoch_profit
+            s[:, 2] / 10,  # consecutive_loss_epochs
+            s[:, 3] / 500,  # active drivers
+            s[:, 4],  # churn rate already in [0,1]
+            s[:, 5] / 100,  # new_signups
+            s[:, 6] / 1e5,  # avg_driver_earnings
+            s[:, 7] / 1e5,  # avg_driver_profit
+            s[:, 8],  # completion rate in [0,1]
         ],
         dtype=np.float32,
-    )
+    ).T
 
 
 env = Env(
@@ -39,7 +44,7 @@ env = Env(
         "seed_money": 1_000_000,
         "base_demand": 1000,
         "multiplier": 50,
-        "avg_order_fee_per_km": 30,
+        "order_fee": np.random.randint(10, 60),
         "initial_driver_count": 50,
     }
 )
@@ -50,15 +55,14 @@ state_dim = len(state)
 payout_options = np.arange(15, 81, 5)
 action_dim = len(payout_options)
 
-policy_net = DQN(state_dim, action_dim)
-target_net = DQN(state_dim, action_dim)
-for p, t in zip(policy_net.parameters(), target_net.parameters()):
-    t.assign(p)
+policy_net = DQN(state_dim, action_dim).to(DEVICE)
+target_net = DQN(state_dim, action_dim).to(DEVICE)
+target_net.eval()
 
-opt = nn.optim.Adam(policy_net.parameters(), lr=LR)
+opt = optim.Adam(policy_net.parameters(), lr=LR)
 memory = deque(maxlen=REPLAY_MEMORY)
 
-print(f"Running on: {Device.DEFAULT}")
+print(f"Running on: {DEVICE}")
 
 for episode in range(EPISODES):
     state = env.reset()
@@ -70,10 +74,10 @@ for episode in range(EPISODES):
         if np.random.random() < EPSILON:
             action = np.random.choice(action_dim)
         else:
-            Tensor.training = False
-            q_values = policy_net(normalize(state))
-            Tensor.training = True
-            action = int(q_values.argmax().item())
+            with torch.no_grad():
+                s = torch.tensor(normalize(state), dtype=torch.float32).to(DEVICE)
+                q_values = policy_net(s)
+                action = int(torch.argmax(q_values).item())
 
         # choose how much to pay
         payout = float(payout_options[action])
@@ -88,19 +92,20 @@ for episode in range(EPISODES):
 
             states, actions, rewards, next_states, dones = zip(*batch)
 
-            losses = []
-            for i in range(BATCH_SIZE):
-                Tensor.training = False
-                target_q = (
-                    rewards[i]
-                    + (1 - dones[i]) * GAMMA * target_net(next_states[i]).max().item()
-                )
-                Tensor.training = True
+            states = torch.tensor(normalize(np.array(states)), dtype=torch.float32).to(DEVICE)
+            next_states = torch.tensor(normalize(np.array(next_states)), dtype=torch.float32).to(DEVICE)
+            actions = torch.tensor(actions, dtype=torch.int64).unsqueeze(1).to(DEVICE)
+            rewards = torch.tensor(rewards, dtype=torch.float32).to(DEVICE)
+            dones = torch.tensor(dones, dtype=torch.float32).to(DEVICE)
 
-                q_pred = policy_net(states[i])[0, actions[i]]
-                losses.append((q_pred - target_q) ** 2)
+            q_pred = policy_net(states).gather(1, actions).squeeze(1)
 
-            loss = Tensor.stack(losses).mean()
+            with torch.no_grad():
+                q_next = target_net(next_states).max(1)[0]
+                q_target = rewards + (1 - dones) * GAMMA * q_next
+
+            loss = nn.functional.mse_loss(q_pred, q_target)
+
             opt.zero_grad()
             loss.backward()
             opt.step()
@@ -109,8 +114,7 @@ for episode in range(EPISODES):
         state = next_state
 
     if episode % TARGET_UPDATE == 0:
-        for p, t in zip(policy_net.parameters(), target_net.parameters()):
-            t.assign(p)
+        target_net.load_state_dict(policy_net.state_dict())
 
     num_drivers_quit = int(env.company.driver_churn_rate * len(env.drivers))
     incomplete_orders = (

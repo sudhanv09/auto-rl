@@ -70,7 +70,7 @@ class Env:
 
                 driver = np.random.choice(self.drivers)
                 if driver.is_active and driver.accept_order(order, policy):
-                    order_fee = order["distance"] * self.config["avg_order_fee_per_km"]
+                    order_fee = self.config["order_fee"]
                     payout = policy["order_payout"]
 
                     self.company.process_payment_to_driver(payout)

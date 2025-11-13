@@ -1,20 +1,15 @@
-from tinygrad.tensor import Tensor
+import torch.nn as nn
 
-class DQN:
-    def __init__(self, state_dim, action_dim, hidden=64):
-        self.W1 = Tensor.uniform(state_dim, hidden)
-        self.b1 = Tensor.zeros(hidden)
-        self.W2 = Tensor.uniform(hidden, hidden)
-        self.b2 = Tensor.zeros(hidden)
-        self.W3 = Tensor.uniform(hidden, action_dim)
-        self.b3 = Tensor.zeros(action_dim)
+class DQN(nn.Module):
+    def __init__(self, input_dim, output_dim):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(input_dim, 128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, output_dim),
+        )
 
-    def __call__(self, x):
-        x = Tensor(x).reshape(1, -1)
-        h1 = x.dot(self.W1).add(self.b1).relu()
-        h2 = h1.dot(self.W2).add(self.b2).relu()
-        out = h2.dot(self.W3).add(self.b3)
-        return out
-
-    def parameters(self):
-        return [self.W1, self.b1, self.W2, self.b2, self.W3, self.b3]
+    def forward(self, x):
+        return self.net(x)
